@@ -1,5 +1,8 @@
 import random
 import math
+import unittest
+import balancer
+import collections
 
 from player_info import PlayerInfo, PerformanceHistory, PerformanceSnapshot
 from player_info import player_info_list_from_steam_id_name_ext_obj_elo_dict
@@ -30,28 +33,31 @@ def generate_player_set(num_players=10, random_elos=True):
 
     return player_infos
 
-
-def test_set_1():
-    d = {
-        0: ("Ivan", 1841, None),
-        1: ("Alice", 1616, None),
-        2: ("Sandra", 1401, None),
-        3: ("Bob", 1368, None),
-        4: ("Mike", 921, None),
-        5: ("Henry", 1402, None),
-        6: ("Carly", 1395, None),
-        7: ("Nathan", 1170, None),
-        8: ("Quentin", 1091, None),
-        9: ("Zachary", 816, None),
-    }
+def generate_player_info_list_from_elos(player_elos):
+    d = {}
+    for i, elo in enumerate(player_elos):
+        assert i < len(TEST_PLAYER_NAMES)
+        d[i] = (TEST_PLAYER_NAMES[i], elo, None)
     return player_info_list_from_steam_id_name_ext_obj_elo_dict(d)
 
-def test_set_2():
-    d = {
-        0: ("Stakz", 2150, None),
-        1: ("Purger", 1600, None),
-        2: ("Comets", 929, None),
-        3: ("the_toilet", 1640, None),
-        4: ("merozollo", 1212, None),
-    }
-    return player_info_list_from_steam_id_name_ext_obj_elo_dict(d)
+ELOBalanceTestSet = collections.namedtuple("ELOBalanceTestSet", ["input_elos", "team_a", "team_b"])
+
+class TestSets(object):
+    TEST_SET_01 = ELOBalanceTestSet(input_elos=[1841, 1616, 1402, 1401, 1395, 1368, 1170, 1091, 921, 816],
+                                    team_a=[1841, 1402, 1395, 1091, 816],
+                                    team_b=[1616, 1401, 1368, 1170, 921])
+
+    TEST_SET_02 = ELOBalanceTestSet(input_elos=[2150, 1640, 1600, 1212, 929],
+                                    team_a=[2150, 1600],
+                                    team_b=[1640, 1212, 929])
+
+class UnstakBalanceTest(unittest.TestCase):
+    def test_set_1(self):
+        elos, (expected_a, expected_b) = TestSets.TEST_SET_01
+        players = generate_player_info_list_from_elos(elos)
+        balancer.balance_players_by_skill_band(players)
+
+
+
+def run_tests():
+    pass

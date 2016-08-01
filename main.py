@@ -46,12 +46,6 @@ class TestPrinter(object):
         diff_rounded = abs(round(avg_red) - round(avg_blue))  # Round individual averages.
 
         def team_color(team_index):
-            if team_index == 0:
-                # red
-                return "^1"
-            elif team_index == 1:
-                # blue
-                return "^4"
             return ""
 
         def stronger_team_index(red_amount, blue_amount):
@@ -64,7 +58,7 @@ class TestPrinter(object):
         round_avg_red = round(avg_red)
         round_avg_blue = round(avg_blue)
         favoured_team_colour_prefix = team_color(stronger_team_index(round_avg_red, round_avg_blue))
-        avg_msg = "^1{} ^7vs ^4{}^7 - DIFFERENCE: ^{}{}".format(round_avg_red,
+        avg_msg = "{} vs {} - DIFFERENCE: {}".format(round_avg_red,
                                                                 round_avg_blue,
                                                                 favoured_team_colour_prefix,
                                                                 diff_rounded)
@@ -84,7 +78,7 @@ class TestPrinter(object):
                                                      difference))
         bands_diff_content = "Balanced"
         if bands_msg:
-            bands_diff_content = "^7, ".join(bands_msg)
+            bands_diff_content = ", ".join(bands_msg)
 
         bands_msg = "Net skill band diff: " + bands_diff_content
         self.msg(bands_msg)
@@ -103,8 +97,7 @@ snap = PerformanceSnapshot(1600, 50)
 print snap
 
 #players = test_data.generate_player_set()
-#players = test_data.test_set_1()
-players = test_data.test_set_2()
+players = test_data.test_set_1()
 print players
 for player in players:
     print str(player)
