@@ -33,6 +33,7 @@ def generate_player_set(num_players=10, random_elos=True):
 
     return player_infos
 
+
 def generate_player_info_list_from_elos(player_elos):
     d = {}
     for i, elo in enumerate(player_elos):
@@ -40,24 +41,91 @@ def generate_player_info_list_from_elos(player_elos):
         d[i] = (TEST_PLAYER_NAMES[i], elo, None)
     return player_info_list_from_steam_id_name_ext_obj_elo_dict(d)
 
-ELOBalanceTestSet = collections.namedtuple("ELOBalanceTestSet", ["input_elos", "team_a", "team_b"])
+ELOBalanceTestSet = collections.namedtuple("ELOBalanceTestSet", ["name", "input_elos", "team_a", "team_b"])
 
-class TestSets(object):
-    TEST_SET_01 = ELOBalanceTestSet(input_elos=[1841, 1616, 1402, 1401, 1395, 1368, 1170, 1091, 921, 816],
-                                    team_a=[1841, 1402, 1395, 1091, 816],
-                                    team_b=[1616, 1401, 1368, 1170, 921])
 
-    TEST_SET_02 = ELOBalanceTestSet(input_elos=[2150, 1640, 1600, 1212, 929],
-                                    team_a=[2150, 1600],
-                                    team_b=[1640, 1212, 929])
+class ELOTestSetRegistry(object):
+    GLOBAL_TESTS = collections.OrderedDict()
+
+    @classmethod
+    def add_test(cls, test_set):
+        assert isinstance(test_set, ELOBalanceTestSet)
+        assert test_set.name not in cls.GLOBAL_TESTS
+        cls.GLOBAL_TESTS[test_set.name] = test_set
+
+    @classmethod
+    def iter_tests(cls):
+        for v in cls.GLOBAL_TESTS.values():
+            yield v
+
+
+def register_elo_test(test_set):
+    ELOTestSetRegistry.add_test(test_set)
+
+ELO_TEST_DATA = [
+    ELOBalanceTestSet(name="Test01",
+                      input_elos=[1841, 1616, 1402, 1401, 1395, 1368, 1170, 1091, 921, 816],
+                      team_a=[1841, 1402, 1395, 1091, 816],
+                      team_b=[1616, 1401, 1368, 1170, 921]),
+
+    ELOBalanceTestSet(name="Test02",
+                      input_elos=[2150, 1640, 1600, 1212, 929],
+                      team_a=[2150, 1600],
+                      team_b=[1640, 1212, 929])
+]
+
+for ELO_TEST in ELO_TEST_DATA:
+    ELOTestSetRegistry.add_test(ELO_TEST)
+
+
+def sorted_elos(team):
+    return tuple(sorted(team, reverse=True))
+
+
+def confirm_test_set_match(test_set, balanced_teams, test_label="", print_failure=False, print_success=False):
+    balanced_team_a, balanced_team_b = balanced_teams
+    output_set = {sorted_elos(balanced_team_a), sorted_elos(balanced_team_b)}
+    if len(output_set) <= 1:
+        # No players or both teams exactly match
+        return True
+    expected_set = {sorted_elos(test_set.team_a), sorted_elos(test_set.team_b)}
+    success = (expected_set == output_set)
+    do_print = (print_failure and not success) or (print_success and success)
+    if do_print:
+        outcome = "OK" if success else "Failure"
+        label = ("%s: " % test_label) if test_label else ""
+        desc = "%s: %s\n\tinput=%s, \n\toutput=%s, \n\texpected=%s" % (outcome, label, test_set.input_elos, output_set, expected_set)
+        print desc
+    if success:
+        return True
+    return False
+
+
+def single_elo_test(test_case):
+    assert isinstance(test_case, ELOBalanceTestSet)
+    test_name, elos, expected_a, expected_b = test_case
+    players = generate_player_info_list_from_elos(elos)
+    balanced_teams = balancer.balance_players_by_skill_band(players)
+    balanced_team_a, balanced_team_b = balanced_teams
+
+    def elos_only(li):
+        return [i.elo for i in li]
+
+    elos_a, elos_b = elos_only(balanced_team_a), elos_only(balanced_team_b)
+    balanced_elos = (elos_a, elos_b)
+    result = confirm_test_set_match(test_case, balanced_elos, test_label=test_name, print_failure=True)
+    return result
+
 
 class UnstakBalanceTest(unittest.TestCase):
-    def test_set_1(self):
-        elos, (expected_a, expected_b) = TestSets.TEST_SET_01
-        players = generate_player_info_list_from_elos(elos)
-        balancer.balance_players_by_skill_band(players)
-
+    def test_elo_balancing(self):
+        for test_set in ELOTestSetRegistry.iter_tests():
+            result = single_elo_test(test_set)
+            self.assertTrue(result, "Team Mismatch")
 
 
 def run_tests():
     pass
+
+if __name__ == '__main__':
+    unittest.main()
