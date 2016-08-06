@@ -94,7 +94,8 @@ def confirm_test_set_match(test_set, balanced_teams, test_label="", print_failur
     if do_print:
         outcome = "OK" if success else "Failure"
         label = ("%s: " % test_label) if test_label else ""
-        desc = "%s: %s\n\tinput=%s, \n\toutput=%s, \n\texpected=%s" % (outcome, label, test_set.input_elos, output_set, expected_set)
+        input_as_set = set((tuple(test_set.input_elos), ))
+        desc = "%s: %s\n\t   input=%s, \n\t  output=%s, \n\texpected=%s" % (outcome, label, input_as_set, output_set, expected_set)
         print desc
     if success:
         return True
