@@ -206,5 +206,28 @@ def balance_players_by_skill_band(players):
     # i.e. is it possible to match accumulated ELOs closer than they currently are without changing category composition?
     return teams
 
+
+"""
+unstak balancing algorithm.
+
+Overview and Concepts:
+- Each player has a individual and isolated predicted effectiveness rating: P
+- A team of players has a predicted team effectiveness rating: T
+- Balanced teams should have a close combined performance rating.
+
+Guidelines:
+- If teams are odd:
+    - the bigger team should probably get the weakest player,
+    - the smaller team should probably get the strongest player
+-
+
+"""
+
+
+#iterative player picker function
+# call the function, and it suggests picking one player from a candidates pool, into the provided teams.
+
+player_effectiveness =
+
 # end unstak
 #----------------------------------------------------------------------------------------------------------------------------------------
