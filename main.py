@@ -22,7 +22,7 @@ def print_team_stats(team_players):
 
 
 def print_team(team_players, print_stats=True):
-    for player in sort_by_elo_descending(team_players):
+    for player in sort_by_skill_rating_descending(team_players):
         assert isinstance(player, PlayerInfo)
         print "%s:%s" % (player.name, player.latest_perf._elo)
     if print_stats:
@@ -63,25 +63,6 @@ class TestPrinter(object):
                                                                 favoured_team_colour_prefix,
                                                                 diff_rounded)
         self.msg(avg_msg)
-        # print some skill band stats
-        bands_msg = []
-        blue_bands = split_players_by_skill_band(new_blue_team)
-        red_bands = split_players_by_skill_band(new_red_team)
-        for category_name in blue_bands.keys():
-            blue_players = blue_bands[category_name]
-            red_players = red_bands[category_name]
-            difference = abs(len(blue_players) - len(red_players))
-            if difference:
-                adv_team_idx = stronger_team_index(len(red_players), len(blue_players))
-                bands_msg.append("{}:{}+{}".format(category_name,
-                                                     team_color(adv_team_idx),
-                                                     difference))
-        bands_diff_content = "Balanced"
-        if bands_msg:
-            bands_diff_content = ", ".join(bands_msg)
-
-        bands_msg = "Net skill band diff: " + bands_diff_content
-        self.msg(bands_msg)
 
 
 def print_teams(teams):
@@ -110,6 +91,6 @@ _players = balance_players_ranked_odd_even(players)
 results_header("odd_even")
 print_teams(_players)
 
-_players = balance_players_by_skill_band(players)
-results_header("skill_band")
+_players = balance_players_by_skill_variance(players)
+results_header("skill_variance")
 print_teams(_players)
