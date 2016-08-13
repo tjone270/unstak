@@ -42,46 +42,7 @@ def balance_players_ranked_odd_even(players):
     return teams
 
 
-def accumulate_teams(team, players):
-    """
-    Accumulate input players placement into a target teams collection, returning the input deficit.
-    :param team: A 2-tuple of lists ([], []) representing the team we are adding players to
-    :param players: A 2-tuple of lists ([], []) representing the players we are adding to the target team
-    :return: an int describing the balance of the added players (before they are added to the team)
-        1  : The right team got an extra player
-        0  : The players added were counted even.
-        -1 : The left team got an extra player
-    """
-    left_count, right_count = len(players[0]), len(players[1])
-    team[0].extend(players[0])
-    team[1].extend(players[1])
-    return right_count - left_count
 
-
-def distribute_skill_band(players_class, bias_left=True):
-    """
-    Split a list into two lists by halving. If there is an odd number of elements, the 0th item will go to the
-    list determined by bias_left parameter
-
-    :param players_class: a list of PlayerInfo objects
-    :param bias_left: True if the left team should get the extra player if there is one. Otherwise right team.
-    :return: a 2-tuple of lists ([], []) filled with the placed players.
-    """
-    sorted_players = sort_by_elo_descending(players_class)
-    teams_category = ([], [])
-
-    # Deal with odd case. The bias side has a deficit, so they deserve the top player of this class
-    even_start_idx = 0
-    bias = 0
-    if len(sorted_players) % 2 != 0:
-        bias = -1 if bias_left else 1
-        idx = 0 if bias_left else 1
-        teams_category[idx].append(sorted_players[0])
-        even_start_idx = 1
-
-    # Place the remaining players
-    bias += accumulate_teams(teams_category, balance_players_ranked_odd_even(sorted_players[even_start_idx:]))
-    return teams_category
 
 
 class SkillBands(object):
@@ -159,6 +120,50 @@ def split_players_by_skill_band(players, balance_ordering=True):
     return d
 
 
+def accumulate_teams(team, players):
+    """
+    Accumulate input players placement into a target teams collection, returning the input deficit.
+    :param team: A 2-tuple of lists ([], []) representing the team we are adding players to
+    :param players: A 2-tuple of lists ([], []) representing the players we are adding to the target team
+    :return: an int describing the balance of the added players (before they are added to the team)
+        1  : The right team got an extra player
+        0  : The players added were counted even.
+        -1 : The left team got an extra player
+    """
+    left_count, right_count = len(players[0]), len(players[1])
+    team[0].extend(players[0])
+    team[1].extend(players[1])
+    return right_count - left_count
+
+
+def distribute_skill_band(players_class, bias_left=True, reverse_order=False):
+    """
+    Split a list into two lists by halving. If there is an odd number of elements, the 0th item will go to the
+    list determined by bias_left parameter
+
+    :param players_class: a list of PlayerInfo objects
+    :param bias_left: True if the left team should get the extra player if there is one. Otherwise right team.
+    :return: a 2-tuple of lists ([], []) filled with the placed players.
+    """
+    sorted_players = sort_by_elo_descending(players_class)
+    if reverse_order:
+        sorted_players = list(reversed(sorted_players))
+    teams_category = ([], [])
+
+    # Deal with odd case. The bias side has a deficit, so they deserve the top player of this class
+    even_start_idx = 0
+    bias = 0
+    if len(sorted_players) % 2 != 0:
+        bias = -1 if bias_left else 1
+        idx = 0 if bias_left else 1
+        teams_category[idx].append(sorted_players[0])
+        even_start_idx = 1
+
+    # Place the remaining players
+    bias += accumulate_teams(teams_category, balance_players_ranked_odd_even(sorted_players[even_start_idx:]))
+    return teams_category
+
+
 def balance_players_by_skill_band(players):
     """
     Balance teams by classifying players into skill bands, and then try to match band distribution between both
@@ -196,7 +201,10 @@ def balance_players_by_skill_band(players):
         bias_left = ((fallback_bias + i) % 2) == 0
         if last_bias_category is not None and bias_levels[last_bias_category] != 0:
             bias_left = True if bias_levels[last_bias_category] == 1 else False
-        resolved_band = distribute_skill_band(category, bias_left=bias_left)
+        reverse_ordering = False #(i == 0) # anchor
+        if i == 0:
+            bias_left = False
+        resolved_band = distribute_skill_band(category, bias_left=bias_left, reverse_order=reverse_ordering)
         category_bias = accumulate_teams(teams, resolved_band)
         bias_levels[i] = category_bias
         if category_bias != 0:
@@ -206,28 +214,6 @@ def balance_players_by_skill_band(players):
     # i.e. is it possible to match accumulated ELOs closer than they currently are without changing category composition?
     return teams
 
-
-"""
-unstak balancing algorithm.
-
-Overview and Concepts:
-- Each player has a individual and isolated predicted effectiveness rating: P
-- A team of players has a predicted team effectiveness rating: T
-- Balanced teams should have a close combined performance rating.
-
-Guidelines:
-- If teams are odd:
-    - the bigger team should probably get the weakest player,
-    - the smaller team should probably get the strongest player
--
-
-"""
-
-
-#iterative player picker function
-# call the function, and it suggests picking one player from a candidates pool, into the provided teams.
-
-player_effectiveness =
 
 # end unstak
 #----------------------------------------------------------------------------------------------------------------------------------------
