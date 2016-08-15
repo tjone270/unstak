@@ -149,8 +149,10 @@ def balance_players_by_skill_variance(players, verbose=True, prune_search_space=
     def generate_category_combo_sets(player_stats_list):
         # generate all combos of 2-team player picks within an stdev skill category
         full_set = set((player_stat.player.steam_id for player_stat in player_stats_list))
+        if len(full_set) == 1:
+            # handle scenario where there is only one player in the category. Add a dummy None player
+            full_set.add(None)
         full_list = list(full_set)
-        #TODO: handle scenario where there is only one player in the category
         for category_combo in itertools.combinations(full_list, int(math.ceil(len(full_list)/2.0))):
             yield (category_combo, tuple(full_set.difference(category_combo)))
 
@@ -164,10 +166,10 @@ def balance_players_by_skill_variance(players, verbose=True, prune_search_space=
         for teams_combo in (itertools.product(*generators.values())):
             running_delta = 0
             valid_combo = True
+            # strip out dummy/None players
+            strip_none = lambda ps: tuple(p for p in ps if p is not None)
+            teams_combo = tuple((strip_none(team_category[0]), strip_none(team_category[1])) for team_category in teams_combo)
             counted_players = sum(len(team_category) for team_category in itertools.chain.from_iterable(teams_combo))
-            if total_players != counted_players:
-                valid_combo = False
-                break
             if prune_search_space:
                 for team_category in teams_combo:
                     # filter to disallow bias on same team in 2 adjacent skill categories
@@ -204,7 +206,7 @@ def balance_players_by_skill_variance(players, verbose=True, prune_search_space=
     min_balance_distance = 1.0
     max_balance_distance = 0.0
     max_results = 10
-    # todo: update results as a heap. define an ADT for it. return best N results.
+    # TODO: update results as a heap. define an ADT for it. return best N results.
     results = []
 
     # temporarily, we just keep the single best result
