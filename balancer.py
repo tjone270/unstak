@@ -104,7 +104,7 @@ def nchoosek(n, r):
         return numerator // denominator
 
 
-def balance_players_by_skill_variance(players, verbose=True, prune_search_space=False):
+def balance_players_by_skill_variance(players, verbose=True, prune_search_space=True):
     players = sort_by_skill_rating_descending(players)
     player_stats = collections.OrderedDict()
     for p in players:
@@ -216,7 +216,8 @@ def balance_players_by_skill_variance(players, verbose=True, prune_search_space=
         balance_prediction = analyze_teams(teams)
         assert isinstance(balance_prediction, BalancePrediction)
         balance_distance = balance_prediction.balance_distance(player_stats)
-        if balance_distance < best_distance:
+        abs_balance_distance = abs(balance_distance)
+        if abs_balance_distance < best_distance:
             best_result = teams
         if verbose:
             combo_desc = str(i+1).ljust(max_iteration_digits, " ")
