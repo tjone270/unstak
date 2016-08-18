@@ -102,11 +102,12 @@ def confirm_test_set_match(test_set, balanced_teams, test_label="", print_failur
     return False
 
 
-def single_elo_test(test_case, balance_algorithm, print_success=False):
+def single_elo_test(test_case, balance_algorithm, print_success=False, **kwargs):
     assert isinstance(test_case, ELOBalanceTestSet)
     test_name, elos, expected_a, expected_b = test_case
     players = generate_player_info_list_from_elos(elos)
-    balanced_teams = balance_algorithm(players)
+    balanced_team_combos = balance_algorithm(players, **kwargs)
+    balanced_teams = balanced_team_combos[0]
     balanced_team_a, balanced_team_b = balanced_teams
 
     def elos_only(li):
@@ -121,7 +122,7 @@ def single_elo_test(test_case, balance_algorithm, print_success=False):
 class UnstakBalanceTest(unittest.TestCase):
     def test_elo_balancing_skill_band(self):
         for test_set in ELOTestSetRegistry.iter_tests():
-            result = single_elo_test(test_set, balancer.balance_players_by_skill_variance, print_success=True)
+            result = single_elo_test(test_set, balancer.balance_players_by_skill_variance, print_success=True, max_results=5)
             #self.assertTrue(result, "Team Mismatch")
 
 

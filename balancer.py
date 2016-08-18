@@ -12,6 +12,31 @@ import heapq
 
 from player_info import PlayerInfo
 
+
+class FixedSizePriorityQueue(object):
+    def __init__(self, max_count=None):
+        self.max_count = max_count
+        self.heap = []
+        heapq.heapify(self.heap)
+
+    def __len__(self):
+        return len(self.heap)
+
+    def add_item(self, item):
+        if not self.max_count or len(self.heap) < self.max_count:
+            heapq.heappush(self.heap, item)
+        else:
+            heapq.heappushpop(self.heap, item)
+
+    def nlargest(self):
+        n = self.max_count if self.max_count else len(self.heap)
+        return heapq.nlargest(n, self.heap)
+
+    def nsmallest(self):
+        n = self.max_count if self.max_count else len(self.heap)
+        return heapq.nsmallest(n, self.heap)
+
+
 def sort_by_skill_rating_descending(players):
     return sorted(players, key=lambda p: (p.elo, p.name), reverse=True)
 
@@ -104,7 +129,7 @@ def nchoosek(n, r):
         return numerator // denominator
 
 
-def balance_players_by_skill_variance(players, verbose=True, prune_search_space=True):
+def balance_players_by_skill_variance(players, verbose=True, prune_search_space=True, max_results=None):
     players = sort_by_skill_rating_descending(players)
     player_stats = collections.OrderedDict()
     for p in players:
@@ -198,38 +223,36 @@ def balance_players_by_skill_variance(players, verbose=True, prune_search_space=
     def analyze_teams(teams):
         return BalancePrediction(teams[0], teams[1])
 
+
     total_players = len(players)
     teams_combos_generator = generate_team_combinations(deviation_categories, total_players, prune_search=prune_search_space)
 
     max_iterations = worst_case_search_space_combo_count(players)
     max_iteration_digits = int(math.log10(max_iterations)+1)
-    min_balance_distance = 1.0
-    max_balance_distance = 0.0
-    max_results = 10
-    # TODO: update results as a heap. define an ADT for it. return best N results.
-    results = []
+    FixedSizePriorityQueue(max_results)
 
-    # temporarily, we just keep the single best result
-    best_distance = 1.0
-    best_result = ([], [])
+    results = FixedSizePriorityQueue(max_results)
+
     for i, teams in enumerate(search_optimal_team_combinations(teams_combos_generator)):
         balance_prediction = analyze_teams(teams)
         assert isinstance(balance_prediction, BalancePrediction)
         balance_distance = balance_prediction.balance_distance(player_stats)
         abs_balance_distance = abs(balance_distance)
-        if abs_balance_distance < best_distance:
-            best_result = teams
+        results.add_item((abs_balance_distance, balance_prediction, teams))
         if verbose:
             combo_desc = str(i+1).ljust(max_iteration_digits, " ")
             print "Combo %s : Team A: %s | Team B: %s | outcome: %.4f" % (combo_desc, teams[0], teams[1], balance_distance)
 
     # TODO: this step seems heavyweight if we are to return multiple results. review.
     # convert it back into a list of players
-    teams_as_players = []
-    for team in best_result:
-        teams_as_players.append(tuple(player_stats[pid].player for pid in team))
-    best_result = tuple(teams_as_players)
-    return best_result
+    result_teams = []
+    for result in results.nsmallest():
+        teams_as_players = []
+        (abs_balance_distance, balance_prediction, teams) = result
+        for team in teams:
+            teams_as_players.append(tuple(player_stats[pid].player for pid in team))
+        result_teams.append(tuple(teams_as_players))
+    return result_teams
 
 # end unstak
 #----------------------------------------------------------------------------------------------------------------------------------------
