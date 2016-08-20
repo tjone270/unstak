@@ -254,5 +254,45 @@ def balance_players_by_skill_variance(players, verbose=True, prune_search_space=
         result_teams.append(tuple(teams_as_players))
     return result_teams
 
+# 1, 2, 3, 4 -- 5, 6, 7, 8
+# 1, 2, 7, 4 -- 5, 6, 3, 8
+
+
+def get_proposed_team_combo_moves(team_combo_1, team_combo_2):
+    # team_combo_1 is current, team_combo_2 is a proposed combination
+    assert len(team_combo_1) == 2 and len(team_combo_2) == 2
+    team1a, team1b = set(team_combo_1[0]), set(team_combo_1[1])
+    team2a, team2b = set(team_combo_2[0]), set(team_combo_2[1])
+    assert team1a.union(team1b) == team2a.union(team2a), "inconsistent input data"
+    assert not team1a.intersection(team1b), "inconsistent input data"
+    assert not team2a.intersection(team2b), "inconsistent input data"
+    players_moved_from_a_to_b = team2a.difference(team1a)
+    players_moved_from_b_to_a = team2b.difference(team1b)
+    players_affected = players_moved_from_a_to_b.union(players_moved_from_b_to_a)
+    return players_affected, players_moved_from_a_to_b, players_moved_from_b_to_a
+
+
+def generate_switch_proposals(teams, verbose=False,  max_results=5):
+    # add 1 to max results, because if the input teams are optimal, then they will come as a result.
+    players = [[p for p in team_players] for team_players in teams]
+    balanced_team_combos = balance_players_by_skill_variance(players,
+                                                             verbose=verbose,
+                                                             prune_search_space=True,
+                                                             max_results=max_results+1)
+    switch_proposals = []
+    for balanced_teams in balanced_team_combos:
+        proposal = get_proposed_team_combo_moves(teams, balanced_teams)
+        switch_proposals.append((proposal, balanced_teams));
+
+
+    def elos_only(li):
+        return [i.elo for i in li]
+
+    elos_a, elos_b = elos_only(balanced_team_a), elos_only(balanced_team_b)
+    balanced_elos = (elos_a, elos_b)
+    result = confirm_test_set_match(test_case, balanced_elos, test_label=test_name, print_failure=True, print_success=print_success)
+
+
+
 # end unstak
 #----------------------------------------------------------------------------------------------------------------------------------------
