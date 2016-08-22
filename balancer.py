@@ -101,8 +101,48 @@ class TeamStats(object):
     def __init__(self, team_players):
         self.players = team_players
 
+    def get_elo_list(self, player_stats_dict):
+        return [player_stats_dict[pid].player.elo for pid in self.players]
+
     def combined_skill_rating(self, player_stats_dict):
-        return sum(player_stats_dict[pid].player.elo for pid in self.players)
+        return sum(self.get_elo_list(player_stats_dict))
+
+    def skill_rating_stdev(self, player_stats_dict):
+        return calc_standard_deviation(self.get_elo_list(player_stats_dict))
+
+
+
+class SingleTeamBakedStats(object):
+    def __init__(self):
+        self.skill_rating_sum = 0
+        self.skill_rating_mean = 0
+        self.skill_rating_stdev = 0
+        self.num_players = 0
+        self.players_by_stdev_rel_server_dict = {}
+        self.players_by_speed_rel_server_dict = {}
+
+
+class MatchPrediction(object):
+    def __init__(self):
+        self.team_a = SingleTeamBakedStats()
+        self.team_b = SingleTeamBakedStats()
+        self.bias = 0
+        self.distance = 0
+        self.confidence = 0
+
+    def get_desc(self):
+        raise NotImplementedError
+
+
+def generate_match_prediction(team_a_baked, team_b_baked):
+    assert isinstance(team_a_baked, SingleTeamBakedStats)
+    assert isinstance(team_b_baked, SingleTeamBakedStats)
+    prediction = MatchPrediction()
+    prediction.team_a = team_a_baked
+    prediction.team_b = team_b_baked
+    prediction.bias = (1.0 * team_b_baked.skill_rating_sum) / team_a_baked.skill_rating_sum
+    prediction.distance = (1.0 - prediction.bias)
+    return prediction
 
 
 class BalancePrediction(object):
@@ -119,6 +159,18 @@ class BalancePrediction(object):
         distance = (1.0 - self.balance_indicator(player_stats_dict))
         return distance
 
+    def generate_match_prediction(self, player_stats_dict):
+        stats = []
+        for team in [self.team_a_stats, self.team_b_stats]:
+            bs = SingleTeamBakedStats()
+            bs.skill_rating_sum = team.combined_skill_rating(player_stats_dict)
+            bs.num_players = len(team.players)
+            assert bs.num_players
+            bs.skill_rating_mean = bs.skill_rating_sum/bs.num_players
+            bs.skill_rating_stdev = team.skill_rating_stdev(player_stats_dict)
+            stats.append(bs)
+        return generate_match_prediction(*stats)
+
 
 def nchoosek(n, r):
         r = min(r, n - r)
@@ -127,6 +179,9 @@ def nchoosek(n, r):
         numerator = reduce(operator.mul, xrange(n, n - r, -1))
         denominator = reduce(operator.mul, xrange(1, r + 1))
         return numerator // denominator
+
+
+BalancedTeamCombo = collections.namedtuple("BalancedTeamCombo", ["teams_tup", "team_prediction"])
 
 
 def balance_players_by_skill_variance(players, verbose=True, prune_search_space=True, max_results=None):
@@ -236,26 +291,29 @@ def balance_players_by_skill_variance(players, verbose=True, prune_search_space=
     for i, teams in enumerate(search_optimal_team_combinations(teams_combos_generator)):
         balance_prediction = analyze_teams(teams)
         assert isinstance(balance_prediction, BalancePrediction)
-        balance_distance = balance_prediction.balance_distance(player_stats)
-        abs_balance_distance = abs(balance_distance)
-        results.add_item((abs_balance_distance, balance_prediction, teams))
+        match_prediction = balance_prediction.generate_match_prediction(player_stats)
+        abs_balance_distance = abs(match_prediction.distance)
+        results.add_item((abs_balance_distance, match_prediction, teams))
         if verbose:
             combo_desc = str(i+1).ljust(max_iteration_digits, " ")
-            print "Combo %s : Team A: %s | Team B: %s | outcome: %.4f" % (combo_desc, teams[0], teams[1], balance_distance)
+            print "Combo %s : Team A: %s | Team B: %s | outcome: %.4f" % \
+                  (combo_desc, teams[0], teams[1], match_prediction.distance)
 
     # TODO: this step seems heavyweight if we are to return multiple results. review.
     # convert it back into a list of players
     result_teams = []
     for result in results.nsmallest():
         teams_as_players = []
-        (abs_balance_distance, balance_prediction, teams) = result
+        (abs_balance_distance, match_prediction, teams) = result
         for team in teams:
             teams_as_players.append(tuple(player_stats[pid].player for pid in team))
-        result_teams.append(tuple(teams_as_players))
+        BalancedTeamCombo(tuple(teams_as_players),match_prediction)
+        result_teams.append()
     return result_teams
 
-# 1, 2, 3, 4 -- 5, 6, 7, 8
-# 1, 2, 7, 4 -- 5, 6, 3, 8
+
+SwitchProposal = collections.namedtuple("SwitchProposal", ["players_affected",
+                                                           "players_moved_from_a_to_b", "players_moved_from_b_to_a"])
 
 
 def get_proposed_team_combo_moves(team_combo_1, team_combo_2):
@@ -269,7 +327,9 @@ def get_proposed_team_combo_moves(team_combo_1, team_combo_2):
     players_moved_from_a_to_b = team2a.difference(team1a)
     players_moved_from_b_to_a = team2b.difference(team1b)
     players_affected = players_moved_from_a_to_b.union(players_moved_from_b_to_a)
-    return players_affected, players_moved_from_a_to_b, players_moved_from_b_to_a
+    return SwitchProposal(players_affected=players_affected,
+                          players_moved_from_a_to_b=players_moved_from_a_to_b,
+                          players_moved_from_b_to_a=players_moved_from_b_to_a
 
 
 def generate_switch_proposals(teams, verbose=False,  max_results=5):
@@ -282,15 +342,12 @@ def generate_switch_proposals(teams, verbose=False,  max_results=5):
     switch_proposals = []
     for balanced_teams in balanced_team_combos:
         proposal = get_proposed_team_combo_moves(teams, balanced_teams)
-        switch_proposals.append((proposal, balanced_teams));
+        assert isinstance(proposal, SwitchProposal)
+        switch_proposals.append((proposal, balanced_teams))
+
+    return switch_proposals
 
 
-    def elos_only(li):
-        return [i.elo for i in li]
-
-    elos_a, elos_b = elos_only(balanced_team_a), elos_only(balanced_team_b)
-    balanced_elos = (elos_a, elos_b)
-    result = confirm_test_set_match(test_case, balanced_elos, test_label=test_name, print_failure=True, print_success=print_success)
 
 
 
