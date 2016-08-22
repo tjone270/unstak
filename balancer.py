@@ -3,38 +3,33 @@
 # This plugin is released to everyone, for any purpose. It comes with no warranty, no guarantee it works, it's released AS IS.
 # You can modify everything, except for lines 1-4. They're there to indicate I whacked this together originally. Please make it better :D
 
+import bisect
 import collections
 import itertools
 import math
 import operator
 import random
-import heapq
+
 
 from player_info import PlayerInfo
 
 
 class FixedSizePriorityQueue(object):
-    def __init__(self, max_count=None):
+    def __init__(self, max_count):
+        assert max_count
         self.max_count = max_count
-        self.heap = []
-        heapq.heapify(self.heap)
+        self.items = []
 
     def __len__(self):
-        return len(self.heap)
+        return len(self.items)
 
     def add_item(self, item):
-        if not self.max_count or len(self.heap) < self.max_count:
-            heapq.heappush(self.heap, item)
-        else:
-            heapq.heappushpop(self.heap, item)
-
-    def nlargest(self):
-        n = self.max_count if self.max_count else len(self.heap)
-        return heapq.nlargest(n, self.heap)
+        bisect.insort_right(self.items, item)
+        if len(self.items) > self.max_count:
+            self.items.pop()
 
     def nsmallest(self):
-        n = self.max_count if self.max_count else len(self.heap)
-        return heapq.nsmallest(n, self.heap)
+        return self.items[:self.max_count]
 
 
 def sort_by_skill_rating_descending(players):
@@ -181,7 +176,17 @@ def nchoosek(n, r):
         return numerator // denominator
 
 
-BalancedTeamCombo = collections.namedtuple("BalancedTeamCombo", ["teams_tup", "team_prediction"])
+BalancedTeamCombo = collections.namedtuple("BalancedTeamCombo", ["teams_tup", "match_prediction"])
+
+
+def player_ids_only(team):
+    if team and isinstance(team[0], PlayerInfo):
+        return [p.steam_id for p in team]
+    return team
+
+def describe_balanced_team_combo(team_a, team_b, match_prediction):
+    assert isinstance(match_prediction, MatchPrediction)
+    return "Team A: %s | Team B: %s | outcome: %.4f" % (player_ids_only(team_a), player_ids_only(team_b), match_prediction.distance)
 
 
 def balance_players_by_skill_variance(players, verbose=True, prune_search_space=True, max_results=None):
@@ -296,59 +301,81 @@ def balance_players_by_skill_variance(players, verbose=True, prune_search_space=
         results.add_item((abs_balance_distance, match_prediction, teams))
         if verbose:
             combo_desc = str(i+1).ljust(max_iteration_digits, " ")
-            print "Combo %s : Team A: %s | Team B: %s | outcome: %.4f" % \
-                  (combo_desc, teams[0], teams[1], match_prediction.distance)
+            print "Combo %s : %s" % (combo_desc, describe_balanced_team_combo(teams[0], teams[1], match_prediction))
 
-    # TODO: this step seems heavyweight if we are to return multiple results. review.
+    # This step seems heavyweight if we are to return a lot of results, so max_results should always be small.
     # convert it back into a list of players
-    result_teams = []
+    result_combos = []
     for result in results.nsmallest():
         teams_as_players = []
         (abs_balance_distance, match_prediction, teams) = result
         for team in teams:
             teams_as_players.append(tuple(player_stats[pid].player for pid in team))
-        BalancedTeamCombo(tuple(teams_as_players),match_prediction)
-        result_teams.append()
-    return result_teams
+        team_combo = BalancedTeamCombo(teams_tup=tuple(teams_as_players), match_prediction=match_prediction)
+        result_combos.append(team_combo)
+    return result_combos
 
 
-SwitchProposal = collections.namedtuple("SwitchProposal", ["players_affected",
-                                                           "players_moved_from_a_to_b", "players_moved_from_b_to_a"])
+SwitchOperation = collections.namedtuple("SwitchOperation", ["players_affected",
+                                                             "players_moved_from_a_to_b", "players_moved_from_b_to_a"])
+
+SwitchProposal = collections.namedtuple("SwitchProposal", ["switch_operation", "balanced_team_combo"])
 
 
 def get_proposed_team_combo_moves(team_combo_1, team_combo_2):
     # team_combo_1 is current, team_combo_2 is a proposed combination
     assert len(team_combo_1) == 2 and len(team_combo_2) == 2
     team1a, team1b = set(team_combo_1[0]), set(team_combo_1[1])
-    team2a, team2b = set(team_combo_2[0]), set(team_combo_2[1])
-    assert team1a.union(team1b) == team2a.union(team2a), "inconsistent input data"
+    if isinstance(team_combo_2, BalancedTeamCombo):
+        team2a, team2b = set(team_combo_2.teams_tup[0]), set(team_combo_2.teams_tup[1])
+    else:
+        team2a, team2b = set(team_combo_2[0]), set(team_combo_2[1])
+    assert team1a.union(team1b) == team2a.union(team2b), "inconsistent input data"
     assert not team1a.intersection(team1b), "inconsistent input data"
     assert not team2a.intersection(team2b), "inconsistent input data"
     players_moved_from_a_to_b = team2a.difference(team1a)
     players_moved_from_b_to_a = team2b.difference(team1b)
     players_affected = players_moved_from_a_to_b.union(players_moved_from_b_to_a)
-    return SwitchProposal(players_affected=players_affected,
-                          players_moved_from_a_to_b=players_moved_from_a_to_b,
-                          players_moved_from_b_to_a=players_moved_from_b_to_a
+    return SwitchOperation(players_affected=players_affected,
+                           players_moved_from_a_to_b=players_moved_from_a_to_b,
+                           players_moved_from_b_to_a=players_moved_from_b_to_a)
 
 
-def generate_switch_proposals(teams, verbose=False,  max_results=5):
+def describe_switch_operation(switch_op):
+    assert isinstance(switch_op, SwitchOperation)
+
+    def get_names(player_set):
+        s = ["["]
+        for i, player in enumerate(sorted(list(player_set), key=lambda p: p.elo, reverse=True)):
+            if i != 0:
+                s.append(", ")
+            s.append("%s(%d)" % (player.name, player.elo))
+        s.append("]")
+        return "".join(s)
+
+    return "switch %s---> | <---%s" % (get_names(switch_op.players_moved_from_a_to_b),
+                                   get_names(switch_op.players_moved_from_b_to_a))
+
+
+def generate_switch_proposals(teams, verbose=False, max_results=5):
     # add 1 to max results, because if the input teams are optimal, then they will come as a result.
-    players = [[p for p in team_players] for team_players in teams]
+    players = []
+    [[players.append(p) for p in team_players] for team_players in teams]
     balanced_team_combos = balance_players_by_skill_variance(players,
                                                              verbose=verbose,
                                                              prune_search_space=True,
                                                              max_results=max_results+1)
     switch_proposals = []
-    for balanced_teams in balanced_team_combos:
-        proposal = get_proposed_team_combo_moves(teams, balanced_teams)
-        assert isinstance(proposal, SwitchProposal)
-        switch_proposals.append((proposal, balanced_teams))
+    for balanced_combo in balanced_team_combos:
+        switch_op = get_proposed_team_combo_moves(teams, balanced_combo)
+        assert isinstance(switch_op, SwitchOperation)
+        assert isinstance(balanced_combo, BalancedTeamCombo)
+        if not switch_op.players_affected:
+            # no change
+            continue
+        switch_proposals.append(SwitchProposal(switch_operation=switch_op, balanced_team_combo=balanced_combo))
 
     return switch_proposals
-
-
-
 
 
 # end unstak

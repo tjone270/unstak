@@ -1,7 +1,7 @@
 import random
 import math
 import unittest
-import balancer
+from balancer import *
 import collections
 
 from player_info import PlayerInfo, PerformanceHistory, PerformanceSnapshot
@@ -102,13 +102,37 @@ def confirm_test_set_match(test_set, balanced_teams, test_label="", print_failur
     return False
 
 
-def single_elo_test(test_case, balance_algorithm, print_success=False, **kwargs):
+def single_elo_test(test_case, print_success=False, **kwargs):
     assert isinstance(test_case, ELOBalanceTestSet)
     test_name, elos, expected_a, expected_b = test_case
     players = generate_player_info_list_from_elos(elos)
-    balanced_team_combos = balance_algorithm(players, **kwargs)
-    balanced_teams = balanced_team_combos[0]
+    balanced_team_combos = balance_players_by_skill_variance(players, **kwargs)
+    balanced_teams = None
+    for i, team_combo in enumerate(balanced_team_combos):
+        assert isinstance(team_combo, BalancedTeamCombo)
+        if i == 0:
+            balanced_teams = team_combo.teams_tup
+        print("results[%d]: %s" % (i, describe_balanced_team_combo(team_combo.teams_tup[0],
+                                                                            team_combo.teams_tup[1],
+                                                                            team_combo.match_prediction)))
     balanced_team_a, balanced_team_b = balanced_teams
+
+    # since its a convenient place, calculate and present the top switch scenarios:
+    switch_proposals = generate_switch_proposals(balanced_teams, **kwargs)
+
+    #player_dict = {(player.steam_id, player) for player in players}
+
+    # prioritize switch operations that affects the least players (or better to not care about this???)
+    switch_proposals = sorted(switch_proposals, key=lambda sp: abs(sp.balanced_team_combo.match_prediction.distance))
+    for i, switch_proposal in enumerate(switch_proposals):
+        assert isinstance(switch_proposal, SwitchProposal)
+        switch_operation = switch_proposal.switch_operation
+        switch_team_combo = switch_proposal.balanced_team_combo
+        assert isinstance(switch_operation, SwitchOperation)
+        assert isinstance(switch_team_combo, BalancedTeamCombo)
+        match_prediction = switch_team_combo.match_prediction
+        assert isinstance(match_prediction, MatchPrediction)
+        print("switch option [%d]: %s | bias=(%s)" % (i, describe_switch_operation(switch_operation), match_prediction.distance))
 
     def elos_only(li):
         return [i.elo for i in li]
@@ -122,7 +146,7 @@ def single_elo_test(test_case, balance_algorithm, print_success=False, **kwargs)
 class UnstakBalanceTest(unittest.TestCase):
     def test_elo_balancing_skill_band(self):
         for test_set in ELOTestSetRegistry.iter_tests():
-            result = single_elo_test(test_set, balancer.balance_players_by_skill_variance, print_success=True, max_results=5)
+            result = single_elo_test(test_set, print_success=True, max_results=5)
             #self.assertTrue(result, "Team Mismatch")
 
 
