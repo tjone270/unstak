@@ -4,9 +4,6 @@ import unittest
 from balancer import *
 import collections
 
-from player_info import PlayerInfo, PerformanceHistory, PerformanceSnapshot
-from player_info import player_info_list_from_steam_id_name_ext_obj_elo_dict
-
 TEST_PLAYER_NAMES = [
     "Alice", "Bob", "Carly", "Daniel", "Eugene", "Fred", "George", "Henry", "Ivan", "Julia", "Kim", "Lucy",
     "Mike", "Nathan", "Olivia", "Patricia", "Quentin", "Robert", "Sandra", "Thomas", "Ulric", "Vivian",
