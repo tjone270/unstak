@@ -940,7 +940,10 @@ class balance(minqlx.Plugin):
         players_info = player_info_list_from_steam_id_name_ext_obj_elo_dict(players_dict)
 
         # do unstak balancing on player data (doesnt actually do any balancing operations)
-        new_blue_team, new_red_team = balance_players_by_skill_band(players_info)
+        balanced_team_combos = balance_players_by_skill_variance(players_info, max_results=1)
+        team_combo = balanced_team_combos[0]
+        assert isinstance(team_combo, BalancedTeamCombo)
+        new_blue_team, new_red_team = team_combo.teams_tup
 
         def move_players_to_new_team(team, team_index):
             """
@@ -1004,25 +1007,6 @@ class balance(minqlx.Plugin):
                                                                 favoured_team_colour_prefix,
                                                                 diff_rounded)
         self.msg(avg_msg)
-        # print some skill band stats
-        bands_msg = []
-        blue_bands = split_players_by_skill_band(new_blue_team)
-        red_bands = split_players_by_skill_band(new_red_team)
-        for category_name in blue_bands.keys():
-            blue_players = blue_bands[category_name]
-            red_players = red_bands[category_name]
-            difference = abs(len(blue_players) - len(red_players))
-            if difference:
-                adv_team_idx = stronger_team_index(len(red_players), len(blue_players))
-                bands_msg.append("{}:{}+{}".format(category_name,
-                                                   team_color(adv_team_idx),
-                                                   difference))
-        bands_diff_content = "Balanced"
-        if bands_msg:
-            bands_diff_content = "^7, ".join(bands_msg)
-
-        bands_msg = "Net skill band diff: " + bands_diff_content
-        self.msg(bands_msg)
 
     def cmd_teams(self, player, msg, channel):
         gt = self.game.type_short
