@@ -204,35 +204,6 @@ def sort_by_skill_rating_descending(players):
     return sorted(players, key=lambda p: (p.elo, p.name), reverse=True)
 
 
-def balance_players_random(players):
-    """
-    Shuffle teams completely randomly.
-    Non deterministic (random)
-
-    :param players: a list of all the players that are to be balanced
-    :return: (team_a, team_b) 2-tuple of lists of players
-    """
-    out = list(players)
-    random.shuffle(out)
-    total = len(out)
-    return out[:total/2], out[total/2:]
-
-
-def balance_players_ranked_odd_even(players):
-    """
-    Balance teams by first sorting players by skill and then picking players alternating to teams.
-    Deterministic (Stable) for a given input.
-
-    :param players: a list of all the players that are to be balanced
-    :return: (team_a, team_b) 2-tuple of lists of players
-    """
-    presorted = sort_by_skill_rating_descending(players)
-    teams = ([], [])
-    for i, player in enumerate(presorted):
-        teams[i % 2].append(player)
-    return teams
-
-
 def skill_rating_list(players):
     return [p.elo for p in players]
 
@@ -352,12 +323,13 @@ def player_ids_only(team):
         return [p.steam_id for p in team]
     return team
 
+
 def describe_balanced_team_combo(team_a, team_b, match_prediction):
     assert isinstance(match_prediction, MatchPrediction)
     return "Team A: %s | Team B: %s | outcome: %.4f" % (player_ids_only(team_a), player_ids_only(team_b), match_prediction.distance)
 
 
-def balance_players_by_skill_variance(players, verbose=True, prune_search_space=True, max_results=None):
+def balance_players_by_skill_variance(players, verbose=False, prune_search_space=True, max_results=None):
     players = sort_by_skill_rating_descending(players)
     player_stats = collections.OrderedDict()
     for p in players:
