@@ -25,14 +25,12 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 # ----------------------------------------------------------------------------------------------------------------------
-
 import bisect
 import collections
 import itertools
 import math
 import operator
 import random
-
 
 def format_obj_desc_str(obj):
     oclass = obj.__class__
