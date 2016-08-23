@@ -22,8 +22,6 @@ import itertools
 import threading
 import random
 import time
-import collections
-import hashlib
 
 from minqlx.database import Redis
 
@@ -35,11 +33,39 @@ SUPPORTED_GAMETYPES = ("ca", "ctf", "dom", "ft", "tdm")
 # Externally supported game types. Used by !getrating for game types the API works with.
 EXT_SUPPORTED_GAMETYPES = ("ca", "ctf", "dom", "ft", "tdm", "duel", "ffa")
 
-
-#----------------------------------------------------------------------------------------------------------------------------------------
+# UNSTAK_START ---------------------------------------------------------------------------------------------------------
+#
 # unstak, an alternative balancing method for minqlx created by github/hyperwired aka "stakz", 2016-07-31
-# This plugin is released to everyone, for any purpose. It comes with no warranty, no guarantee it works, it's released AS IS.
-# You can modify everything, except for lines 1-4. They're there to indicate I whacked this together originally. Please make it better :D
+# This code is released under the MIT Licence:
+#
+# The MIT License (MIT)
+#
+# Copyright (c) 2016
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+# ----------------------------------------------------------------------------------------------------------------------
+import bisect
+import collections
+import itertools
+import math
+import operator
+import random
 
 def format_obj_desc_str(obj):
     oclass = obj.__class__
@@ -156,7 +182,25 @@ def player_info_list_from_steam_id_name_ext_obj_elo_dict(d):
     return out
 
 
-def sort_by_elo_descending(players):
+class FixedSizePriorityQueue(object):
+    def __init__(self, max_count):
+        assert max_count
+        self.max_count = max_count
+        self.items = []
+
+    def __len__(self):
+        return len(self.items)
+
+    def add_item(self, item):
+        bisect.insort_right(self.items, item)
+        if len(self.items) > self.max_count:
+            self.items.pop()
+
+    def nsmallest(self):
+        return self.items[:self.max_count]
+
+
+def sort_by_skill_rating_descending(players):
     return sorted(players, key=lambda p: (p.elo, p.name), reverse=True)
 
 
@@ -182,181 +226,326 @@ def balance_players_ranked_odd_even(players):
     :param players: a list of all the players that are to be balanced
     :return: (team_a, team_b) 2-tuple of lists of players
     """
-    presorted = sort_by_elo_descending(players)
+    presorted = sort_by_skill_rating_descending(players)
     teams = ([], [])
     for i, player in enumerate(presorted):
         teams[i % 2].append(player)
     return teams
 
 
-def accumulate_teams(team, players):
-    """
-    Accumulate input players placement into a target teams collection, returning the input deficit.
-    :param team: A 2-tuple of lists ([], []) representing the team we are adding players to
-    :param players: A 2-tuple of lists ([], []) representing the players we are adding to the target team
-    :return: an int describing the balance of the added players (before they are added to the team)
-        1  : The right team got an extra player
-        0  : The players added were counted even.
-        -1 : The left team got an extra player
-    """
-    left_count, right_count = len(players[0]), len(players[1])
-    team[0].extend(players[0])
-    team[1].extend(players[1])
-    return right_count - left_count
+def skill_rating_list(players):
+    return [p.elo for p in players]
 
 
-def distribute_skill_band(players_class, bias_left=True):
-    """
-    Split a list into two lists by halving. If there is an odd number of elements, the 0th item will go to the
-    list determined by bias_left parameter
-
-    :param players_class: a list of PlayerInfo objects
-    :param bias_left: True if the left team should get the extra player if there is one. Otherwise right team.
-    :return: a 2-tuple of lists ([], []) filled with the placed players.
-    """
-    sorted_players = sort_by_elo_descending(players_class)
-    teams_category = ([], [])
-
-    # Deal with odd case. The bias side has a deficit, so they deserve the top player of this class
-    even_start_idx = 0
-    bias = 0
-    if len(sorted_players) % 2 != 0:
-        bias = -1 if bias_left else 1
-        idx = 0 if bias_left else 1
-        teams_category[idx].append(sorted_players[0])
-        even_start_idx = 1
-
-    # Place the remaining players
-    bias += accumulate_teams(teams_category, balance_players_ranked_odd_even(sorted_players[even_start_idx:]))
-    return teams_category
+def calc_mean(values):
+    return sum(values)/(1.0*len(values))
 
 
-class SkillBands(object):
-    """
-    There are 5 broad skill bands:
-    - "rookie": Generally are a liability to the team. New or under-performing players starting their skill journey.
-    - "standard": An OK player. It is a wide category because typically they are inconsistent.
-    - "decent": A mostly reliable/decent player that is often in the top half of the score board in a public match
-    - "carry": A consistently top or near-top scoring player. Typically 98th percentile upwards.
-    - "pro": Outlier-level excellent player capable of professional solo play. one of the top few in their region.
+def calc_standard_deviation(values, mean=None):
+    if mean is None:
+        mean = calc_mean(values)
+    variance = calc_mean([(val - mean) ** 2 for val in values])
+    return math.sqrt(variance)
 
-    Precedence of balancing is [rookie, pro, carries, decent, standard]
-    The reasoning is that this is the order in which they usually impact the match outcome
-    """
-    ROOKIE_CATEGORY_NAME = "rookie"
-    STANDARD_CATEGORY_NAME = "standard"
-    DECENT_CATEGORY_NAME = "decent"
-    CARRY_CATEGORY_NAME = "carry"
-    PRO_CATEGORY_NAME = "pro"
 
+class PlayerStats(object):
+    def __init__(self, player):
+        self.player = player
+        self.relative_deviation = 0
+
+    @property
+    def relative_deviation_category(self):
+        if self.relative_deviation < 0:
+            return math.ceil(self.relative_deviation)
+        return math.floor(self.relative_deviation)
+
+
+class TeamStats(object):
+    def __init__(self, team_players):
+        self.players = team_players
+
+    def get_elo_list(self, player_stats_dict):
+        return [player_stats_dict[pid].player.elo for pid in self.players]
+
+    def combined_skill_rating(self, player_stats_dict):
+        return sum(self.get_elo_list(player_stats_dict))
+
+    def skill_rating_stdev(self, player_stats_dict):
+        return calc_standard_deviation(self.get_elo_list(player_stats_dict))
+
+
+
+class SingleTeamBakedStats(object):
     def __init__(self):
-        self.ROOKIE_START_ELO = 0
-        self.STANDARD_START_ELO = 1250
-        self.DECENT_START_ELO = 1720
-        self.CARRY_START_ELO = 1950
-        self.PRO_START_ELO = 2220
-        self.MAX_ELO = 999999
-
-    def get_skill_ordering(self):
-        return [self.ROOKIE_CATEGORY_NAME,
-                self.STANDARD_CATEGORY_NAME,
-                self.DECENT_CATEGORY_NAME,
-                self.CARRY_CATEGORY_NAME,
-                self.PRO_CATEGORY_NAME]
-
-    def get_balance_ordering(self):
-        return [self.ROOKIE_CATEGORY_NAME,
-                self.PRO_CATEGORY_NAME,
-                self.CARRY_CATEGORY_NAME,
-                self.DECENT_CATEGORY_NAME,
-                self.STANDARD_CATEGORY_NAME]
-
-    def get_ordering(self, balance_ordering=True):
-        if balance_ordering:
-            return self.get_balance_ordering()
-        else:
-            return self.get_skill_ordering()
-
-    def get_category_intervals(self, balance_ordering=True):
-        d = {
-            self.ROOKIE_CATEGORY_NAME: (self.ROOKIE_START_ELO, self.STANDARD_START_ELO),
-            self.STANDARD_CATEGORY_NAME: (self.STANDARD_START_ELO, self.DECENT_START_ELO),
-            self.DECENT_CATEGORY_NAME: (self.DECENT_START_ELO, self.CARRY_START_ELO),
-            self.CARRY_CATEGORY_NAME: (self.CARRY_START_ELO, self.PRO_START_ELO),
-            self.PRO_CATEGORY_NAME: (self.PRO_START_ELO, self.MAX_ELO),
-        }
-        out = collections.OrderedDict()
-        ordering = self.get_ordering(balance_ordering=balance_ordering)
-        for band_name in ordering:
-            out[band_name] = d[band_name]
-        return out
+        self.skill_rating_sum = 0
+        self.skill_rating_mean = 0
+        self.skill_rating_stdev = 0
+        self.num_players = 0
+        self.players_by_stdev_rel_server_dict = {}
+        self.players_by_speed_rel_server_dict = {}
 
 
-def split_players_by_skill_band(players, balance_ordering=True):
-    """
-    :param players: a list of all the players (PlayerInfo) that need to be balanced
-    :return: players split by skill band [(category name: PlayerInfo), ...]
-    """
-    default_skill_bands = SkillBands()
-    skill_intervals = default_skill_bands.get_category_intervals(balance_ordering=balance_ordering)
+class MatchPrediction(object):
+    def __init__(self):
+        self.team_a = SingleTeamBakedStats()
+        self.team_b = SingleTeamBakedStats()
+        self.bias = 0
+        self.distance = 0
+        self.confidence = 0
 
-    d = collections.OrderedDict()
-    for category_name, (interval_start, interval_end) in skill_intervals.items():
-        d[category_name] = [p for p in players if (p.elo >= interval_start and p.elo < interval_end)]
-    return d
+    def get_desc(self):
+        raise NotImplementedError
 
 
-def balance_players_by_skill_band(players):
-    """
-    Balance teams by classifying players into skill bands, and then try to match band distribution between both
-    teams. In scenarios where there are odd players per skill band, we track the deficit and make up for it in
-    the next bands.
-    Deterministic (Stable) for a given input.
+def generate_match_prediction(team_a_baked, team_b_baked):
+    assert isinstance(team_a_baked, SingleTeamBakedStats)
+    assert isinstance(team_b_baked, SingleTeamBakedStats)
+    prediction = MatchPrediction()
+    prediction.team_a = team_a_baked
+    prediction.team_b = team_b_baked
+    prediction.bias = (1.0 * team_b_baked.skill_rating_sum) / team_a_baked.skill_rating_sum
+    prediction.distance = (1.0 - prediction.bias)
+    return prediction
 
-    See SkillBands for a definition of skill bands
 
-    :param players: a list of all the players that are to be balanced
-    :return: (team_a, team_b) 2-tuple of lists of players
-    """
-    bands = split_players_by_skill_band(players, balance_ordering=True)
-    categories = list(bands.values())
+class BalancePrediction(object):
+    def __init__(self, team_a, team_b):
+        self.team_a_stats = TeamStats(team_a)
+        self.team_b_stats = TeamStats(team_b)
 
-    # Generate a value based on player elos to pick which side gets tiebreaker bias for first category
-    # We do it this way so e.g. left team is not always favoured, but keeping it deterministic so that the
-    # same elo profiles input will generate the same matchmaking without introducing RNG randomness (for testability).
-    hasher = hashlib.md5()
-    sorted_players = sort_by_elo_descending(players)
-    for player in sorted_players:
+    def balance_indicator(self, player_stats_dict):
+        team_a_skill_sum = self.team_a_stats.combined_skill_rating(player_stats_dict)
+        team_b_skill_sum = self.team_b_stats.combined_skill_rating(player_stats_dict)
+        return (1.0 * team_b_skill_sum)/team_a_skill_sum
+
+    def balance_distance(self, player_stats_dict):
+        distance = (1.0 - self.balance_indicator(player_stats_dict))
+        return distance
+
+    def generate_match_prediction(self, player_stats_dict):
+        stats = []
+        for team in [self.team_a_stats, self.team_b_stats]:
+            bs = SingleTeamBakedStats()
+            bs.skill_rating_sum = team.combined_skill_rating(player_stats_dict)
+            bs.num_players = len(team.players)
+            assert bs.num_players
+            bs.skill_rating_mean = bs.skill_rating_sum/bs.num_players
+            bs.skill_rating_stdev = team.skill_rating_stdev(player_stats_dict)
+            stats.append(bs)
+        return generate_match_prediction(*stats)
+
+
+def nchoosek(n, r):
+        r = min(r, n - r)
+        if r == 0:
+            return 1
+        numerator = reduce(operator.mul, xrange(n, n - r, -1))
+        denominator = reduce(operator.mul, xrange(1, r + 1))
+        return numerator // denominator
+
+
+BalancedTeamCombo = collections.namedtuple("BalancedTeamCombo", ["teams_tup", "match_prediction"])
+
+
+def player_ids_only(team):
+    if team and isinstance(team[0], PlayerInfo):
+        return [p.steam_id for p in team]
+    return team
+
+def describe_balanced_team_combo(team_a, team_b, match_prediction):
+    assert isinstance(match_prediction, MatchPrediction)
+    return "Team A: %s | Team B: %s | outcome: %.4f" % (player_ids_only(team_a), player_ids_only(team_b), match_prediction.distance)
+
+
+def balance_players_by_skill_variance(players, verbose=True, prune_search_space=True, max_results=None):
+    players = sort_by_skill_rating_descending(players)
+    player_stats = collections.OrderedDict()
+    for p in players:
+        player_stats[p.steam_id] = PlayerStats(p)
+
+    # We assume that the skill rating is based on a Gaussian (normal) distribution in the global player population.
+    # The input players is a sample of the actual population, but for the purposes of this algorithm, we treat the
+    # sample as the population, since we are not trying to make inferences on the actual population. We also
+    # assume a normal distribution in the sample to find outlier players, which should be true in most scenarios.
+    sample_mean = calc_mean(skill_rating_list(players))
+    sample_stdev = calc_standard_deviation(skill_rating_list(players), mean=sample_mean)
+
+    if verbose:
+        print "sample mean: %.2f" % sample_mean
+        print "sample stdev: %.2f" % sample_stdev
+
+    # for each player, determine their distance in standard deviations from the sample mean.
+    deviation_categories = collections.OrderedDict()
+    for player_stat in player_stats.values():
+        assert isinstance(player_stat, PlayerStats)
+        player = player_stat.player
         assert isinstance(player, PlayerInfo)
-        hasher.update(("%d-%d" % (player.elo, player.elo_variance)).encode("utf-8"))
-    fallback_bias = bytearray(hasher.digest())[0] & 0x1
+        player_stat.relative_deviation = 1.0 * ((player_stat.player.elo - sample_mean) / (sample_stdev * 1.0))
+        print "%s(%d): skill=%s stdev=%.2f" % (player.name, player.steam_id, player.elo, player_stat.relative_deviation)
+        if player_stat.relative_deviation_category not in deviation_categories:
+            deviation_categories[player_stat.relative_deviation_category] = []
+        deviation_categories[player_stat.relative_deviation_category].append(player_stat)
 
-    team_a = []
-    team_b = []
+    if verbose:
+        print deviation_categories
 
-    teams = (team_a, team_b)
+    # Do a brute force space search by trying different combos of player picks.
+    #   - Search space reduction techniques:
+    #       - generating combinations (n choose n/2) per standard deviation
+    #       - now do a search through the cartesian product of 1 pick from each stdev combo
+    #       - picks where the distance between left and right teams is more than 2 players per stdev can be ommitted.
+    #   - Define and use a set of heuristics to predict the match quality of each possible teams pick.
+    #   - Only maintain the top N matches in memory/results
 
-    bias_levels = [0]*len(categories)
-    last_bias_category = None
-    for i, category in enumerate(categories):
-        # each category gets alternating default bias
-        bias_left = ((fallback_bias + i) % 2) == 0
-        if last_bias_category is not None and bias_levels[last_bias_category] != 0:
-            bias_left = True if bias_levels[last_bias_category] == 1 else False
-        resolved_band = distribute_skill_band(category, bias_left=bias_left)
-        category_bias = accumulate_teams(teams, resolved_band)
-        bias_levels[i] = category_bias
-        if category_bias != 0:
-            last_bias_category = i
+    categories = []
 
-    #TODO: Are we done? Rebalance between players at same skillrating level per category?
-    # i.e. is it possible to match accumulated ELOs closer than they currently are without changing category composition?
-    return teams
+    def generate_category_combo_sets(player_stats_list):
+        # generate all combos of 2-team player picks within an stdev skill category
+        full_set = set((player_stat.player.steam_id for player_stat in player_stats_list))
+        if len(full_set) == 1:
+            # handle scenario where there is only one player in the category. Add a dummy None player
+            full_set.add(None)
+        full_list = list(full_set)
+        for category_combo in itertools.combinations(full_list, int(math.ceil(len(full_list)/2.0))):
+            yield (category_combo, tuple(full_set.difference(category_combo)))
 
-# end unstak
-#----------------------------------------------------------------------------------------------------------------------------------------
+    def generate_team_combinations(deviation_categories_dict, total_players, prune_search=False):
+        # generate all valid cross-category 2-team picks via a filtered cartesian product of valid in-category combos.
+        generators = collections.OrderedDict()
+        for deviation_category, player_stats in deviation_categories_dict.items():
+            generators[deviation_category] = generate_category_combo_sets(player_stats)
+
+        # feed the generators into the cartesian product generator
+        for teams_combo in (itertools.product(*generators.values())):
+            running_delta = 0
+            valid_combo = True
+            # strip out dummy/None players
+            strip_none = lambda ps: tuple(p for p in ps if p is not None)
+            teams_combo = tuple((strip_none(team_category[0]), strip_none(team_category[1])) for team_category in teams_combo)
+            counted_players = sum(len(team_category) for team_category in itertools.chain.from_iterable(teams_combo))
+            if prune_search_space:
+                for team_category in teams_combo:
+                    # filter to disallow bias on same team in 2 adjacent skill categories
+                    players_a, players_b = team_category
+                    category_delta = len(players_b) - len(players_a)
+                    if abs(category_delta) >= 2:
+                        valid_combo = False
+                        break
+                    running_delta += category_delta
+                    if abs(running_delta) >= 2:
+                        valid_combo = False
+                        break
+            if valid_combo:
+                yield teams_combo
+
+    def worst_case_search_space_combo_count(players):
+        players_count = len(players)
+        return nchoosek(players_count, int(math.ceil(players_count/2.0)))
+
+    def search_optimal_team_combinations(teams_generator):
+        # iterate through the generated teams, using heuristics to rate them and keep the top N
+        for teams_combo in teams_generator:
+            teams = tuple(tuple(itertools.chain.from_iterable(team)) for team in zip(*teams_combo))
+            yield teams
+
+    def analyze_teams(teams):
+        return BalancePrediction(teams[0], teams[1])
 
 
+    total_players = len(players)
+    teams_combos_generator = generate_team_combinations(deviation_categories, total_players, prune_search=prune_search_space)
+
+    max_iterations = worst_case_search_space_combo_count(players)
+    max_iteration_digits = int(math.log10(max_iterations)+1)
+    FixedSizePriorityQueue(max_results)
+
+    results = FixedSizePriorityQueue(max_results)
+
+    for i, teams in enumerate(search_optimal_team_combinations(teams_combos_generator)):
+        balance_prediction = analyze_teams(teams)
+        assert isinstance(balance_prediction, BalancePrediction)
+        match_prediction = balance_prediction.generate_match_prediction(player_stats)
+        abs_balance_distance = abs(match_prediction.distance)
+        results.add_item((abs_balance_distance, match_prediction, teams))
+        if verbose:
+            combo_desc = str(i+1).ljust(max_iteration_digits, " ")
+            print "Combo %s : %s" % (combo_desc, describe_balanced_team_combo(teams[0], teams[1], match_prediction))
+
+    # This step seems heavyweight if we are to return a lot of results, so max_results should always be small.
+    # convert it back into a list of players
+    result_combos = []
+    for result in results.nsmallest():
+        teams_as_players = []
+        (abs_balance_distance, match_prediction, teams) = result
+        for team in teams:
+            teams_as_players.append(tuple(player_stats[pid].player for pid in team))
+        team_combo = BalancedTeamCombo(teams_tup=tuple(teams_as_players), match_prediction=match_prediction)
+        result_combos.append(team_combo)
+    return result_combos
+
+
+SwitchOperation = collections.namedtuple("SwitchOperation", ["players_affected",
+                                                             "players_moved_from_a_to_b", "players_moved_from_b_to_a"])
+
+SwitchProposal = collections.namedtuple("SwitchProposal", ["switch_operation", "balanced_team_combo"])
+
+
+def get_proposed_team_combo_moves(team_combo_1, team_combo_2):
+    # team_combo_1 is current, team_combo_2 is a proposed combination
+    assert len(team_combo_1) == 2 and len(team_combo_2) == 2
+    team1a, team1b = set(team_combo_1[0]), set(team_combo_1[1])
+    if isinstance(team_combo_2, BalancedTeamCombo):
+        team2a, team2b = set(team_combo_2.teams_tup[0]), set(team_combo_2.teams_tup[1])
+    else:
+        team2a, team2b = set(team_combo_2[0]), set(team_combo_2[1])
+    assert team1a.union(team1b) == team2a.union(team2b), "inconsistent input data"
+    assert not team1a.intersection(team1b), "inconsistent input data"
+    assert not team2a.intersection(team2b), "inconsistent input data"
+    players_moved_from_a_to_b = team2a.difference(team1a)
+    players_moved_from_b_to_a = team2b.difference(team1b)
+    players_affected = players_moved_from_a_to_b.union(players_moved_from_b_to_a)
+    return SwitchOperation(players_affected=players_affected,
+                           players_moved_from_a_to_b=players_moved_from_a_to_b,
+                           players_moved_from_b_to_a=players_moved_from_b_to_a)
+
+
+def describe_switch_operation(switch_op):
+    assert isinstance(switch_op, SwitchOperation)
+
+    def get_names(player_set):
+        s = ["["]
+        for i, player in enumerate(sorted(list(player_set), key=lambda p: p.elo, reverse=True)):
+            if i != 0:
+                s.append(", ")
+            s.append("%s(%d)" % (player.name, player.elo))
+        s.append("]")
+        return "".join(s)
+
+    return "switch %s---> | <---%s" % (get_names(switch_op.players_moved_from_a_to_b),
+                                   get_names(switch_op.players_moved_from_b_to_a))
+
+
+def generate_switch_proposals(teams, verbose=False, max_results=5):
+    # add 1 to max results, because if the input teams are optimal, then they will come as a result.
+    players = []
+    [[players.append(p) for p in team_players] for team_players in teams]
+    balanced_team_combos = balance_players_by_skill_variance(players,
+                                                             verbose=verbose,
+                                                             prune_search_space=True,
+                                                             max_results=max_results+1)
+    switch_proposals = []
+    for balanced_combo in balanced_team_combos:
+        switch_op = get_proposed_team_combo_moves(teams, balanced_combo)
+        assert isinstance(switch_op, SwitchOperation)
+        assert isinstance(balanced_combo, BalancedTeamCombo)
+        if not switch_op.players_affected:
+            # no change
+            continue
+        switch_proposals.append(SwitchProposal(switch_operation=switch_op, balanced_team_combo=balanced_combo))
+
+    return switch_proposals
+
+# UNSTAK_END -----------------------------------------------------------------------------------------------------------
 
 class balance(minqlx.Plugin):
     database = Redis
