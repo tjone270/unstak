@@ -481,8 +481,14 @@ def get_proposed_team_combo_moves(team_combo_1, team_combo_2):
                            players_moved_from_b_to_a=players_moved_from_b_to_a)
 
 
-def describe_switch_operation(switch_op):
+def describe_switch_operation(switch_op, team_names=None):
     assert isinstance(switch_op, SwitchOperation)
+    left_team_desc = ""
+    right_team_desc = ""
+    if team_names:
+        assert len(team_names) == 2
+        left_team_desc = "%s " % team_names[0]
+        right_team_desc = " %s" % team_names[0]
 
     def get_names(player_set):
         s = ["["]
@@ -493,8 +499,8 @@ def describe_switch_operation(switch_op):
         s.append("]")
         return "".join(s)
 
-    return "switch %s---> | <---%s" % (get_names(switch_op.players_moved_from_a_to_b),
-                                   get_names(switch_op.players_moved_from_b_to_a))
+    return "switch %s--->%s | %s<---%s" % (get_names(switch_op.players_moved_from_a_to_b), right_team_desc,
+                                           left_team_desc, get_names(switch_op.players_moved_from_b_to_a))
 
 
 def generate_switch_proposals(teams, verbose=False, max_results=5):

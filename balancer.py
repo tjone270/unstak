@@ -229,6 +229,20 @@ class MatchPrediction(object):
         self.distance = 0
         self.confidence = 0
 
+    def describe_prediction_short(self, team_names=None):
+        # assuming bias is in the interval [-1,1], convert it to favoured chance so that
+        # a bias of zero gets presented as a 50%/50% win prediction
+        left_team_desc = ""
+        right_team_desc = ""
+        if team_names:
+            assert len(team_names) == 2
+            left_team_desc = "%s " % team_names[0]
+            right_team_desc = " %s" % team_names[1]
+
+        left_win_chance = self.bias * 100
+        right_win_chance = 100 - left_win_chance
+        return "%s%.2f%%/%.2f%%%s" % (left_team_desc, left_win_chance, right_win_chance, right_team_desc)
+
     def get_desc(self):
         raise NotImplementedError
 
@@ -239,8 +253,8 @@ def generate_match_prediction(team_a_baked, team_b_baked):
     prediction = MatchPrediction()
     prediction.team_a = team_a_baked
     prediction.team_b = team_b_baked
-    prediction.bias = (1.0 * team_b_baked.skill_rating_sum) / team_a_baked.skill_rating_sum
-    prediction.distance = (1.0 - prediction.bias)
+    prediction.bias = (1.0 * team_b_baked.skill_rating_sum) / (team_a_baked.skill_rating_sum + team_b_baked.skill_rating_sum)
+    prediction.distance = (0.5 - prediction.bias)
     return prediction
 
 
@@ -248,15 +262,6 @@ class BalancePrediction(object):
     def __init__(self, team_a, team_b):
         self.team_a_stats = TeamStats(team_a)
         self.team_b_stats = TeamStats(team_b)
-
-    def balance_indicator(self, player_stats_dict):
-        team_a_skill_sum = self.team_a_stats.combined_skill_rating(player_stats_dict)
-        team_b_skill_sum = self.team_b_stats.combined_skill_rating(player_stats_dict)
-        return (1.0 * team_b_skill_sum)/team_a_skill_sum
-
-    def balance_distance(self, player_stats_dict):
-        distance = (1.0 - self.balance_indicator(player_stats_dict))
-        return distance
 
     def generate_match_prediction(self, player_stats_dict):
         stats = []
@@ -291,7 +296,8 @@ def player_ids_only(team):
 
 def describe_balanced_team_combo(team_a, team_b, match_prediction):
     assert isinstance(match_prediction, MatchPrediction)
-    return "Team A: %s | Team B: %s | outcome: %.4f" % (player_ids_only(team_a), player_ids_only(team_b), match_prediction.distance)
+    return "Team A: %s | Team B: %s | outcome: %s" % (player_ids_only(team_a), player_ids_only(team_b),
+                                                        match_prediction.describe_prediction_short())
 
 
 def balance_players_by_skill_variance(players, verbose=False, prune_search_space=True, max_results=None):
@@ -446,20 +452,31 @@ def get_proposed_team_combo_moves(team_combo_1, team_combo_2):
                            players_moved_from_b_to_a=players_moved_from_b_to_a)
 
 
-def describe_switch_operation(switch_op):
+def describe_switch_operation(switch_op, team_names=None):
     assert isinstance(switch_op, SwitchOperation)
+    left_team_desc = ""
+    right_team_desc = ""
+    if team_names:
+        assert len(team_names) == 2
+        left_team_desc = "%s " % team_names[0]
+        right_team_desc = " %s" % team_names[1]
 
     def get_names(player_set):
-        s = ["["]
+        s = []
         for i, player in enumerate(sorted(list(player_set), key=lambda p: p.elo, reverse=True)):
             if i != 0:
                 s.append(", ")
             s.append("%s(%d)" % (player.name, player.elo))
-        s.append("]")
         return "".join(s)
 
-    return "switch %s---> | <---%s" % (get_names(switch_op.players_moved_from_a_to_b),
-                                   get_names(switch_op.players_moved_from_b_to_a))
+    out = []
+    if switch_op.players_moved_from_a_to_b:
+        out.append("%s --->%s" % (get_names(switch_op.players_moved_from_a_to_b), right_team_desc))
+    if switch_op.players_moved_from_a_to_b and switch_op.players_moved_from_b_to_a:
+        out.append(" | ")
+    if switch_op.players_moved_from_b_to_a:
+        out.append("%s<--- %s" % (left_team_desc, get_names(switch_op.players_moved_from_b_to_a)))
+    return "".join(out)
 
 
 def generate_switch_proposals(teams, verbose=False, max_results=5):

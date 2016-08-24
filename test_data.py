@@ -120,6 +120,7 @@ def single_elo_test(test_case, print_success=False, **kwargs):
     #player_dict = {(player.steam_id, player) for player in players}
 
     # prioritize switch operations that affects the least players (or better to not care about this???)
+    team_names = ["blue", "red"]
     switch_proposals = sorted(switch_proposals, key=lambda sp: abs(sp.balanced_team_combo.match_prediction.distance))
     for i, switch_proposal in enumerate(switch_proposals):
         assert isinstance(switch_proposal, SwitchProposal)
@@ -129,7 +130,9 @@ def single_elo_test(test_case, print_success=False, **kwargs):
         assert isinstance(switch_team_combo, BalancedTeamCombo)
         match_prediction = switch_team_combo.match_prediction
         assert isinstance(match_prediction, MatchPrediction)
-        print("switch option [%d]: %s | bias=(%s)" % (i, describe_switch_operation(switch_operation), match_prediction.distance))
+        print("switch option [%d]: %s | %s" %
+              (i, describe_switch_operation(switch_operation, team_names=team_names),
+               match_prediction.describe_prediction_short(team_names=team_names)))
 
     def elos_only(li):
         return [i.elo for i in li]
