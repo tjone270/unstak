@@ -239,8 +239,8 @@ class MatchPrediction(object):
             left_team_desc = "%s " % team_names[0]
             right_team_desc = " %s" % team_names[1]
 
-        left_win_chance = self.bias * 100
-        right_win_chance = 100 - left_win_chance
+        right_win_chance = self.bias * 100
+        left_win_chance = 100 - right_win_chance
         return "%s%.2f%%/%.2f%%%s" % (left_team_desc, left_win_chance, right_win_chance, right_team_desc)
 
     def get_desc(self):
@@ -294,10 +294,17 @@ def player_ids_only(team):
     return team
 
 
+def player_names_and_skill_only(team):
+    if team and isinstance(team[0], PlayerInfo):
+        return " ".join(["%s(%s)" % (p.name, p.elo) for p in team])
+    return team
+
+
 def describe_balanced_team_combo(team_a, team_b, match_prediction):
     assert isinstance(match_prediction, MatchPrediction)
-    return "Team A: %s | Team B: %s | outcome: %s" % (player_ids_only(team_a), player_ids_only(team_b),
-                                                        match_prediction.describe_prediction_short())
+    return "Team A: %s | Team B: %s | outcome: %s" % (player_names_and_skill_only(team_a),
+                                                      player_names_and_skill_only(team_b),
+                                                      match_prediction.describe_prediction_short())
 
 
 def balance_players_by_skill_variance(players, verbose=False, prune_search_space=True, max_results=None):
