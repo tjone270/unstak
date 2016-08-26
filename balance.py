@@ -594,11 +594,11 @@ class UnstakSuggestionsGroup(object):
 	relative stat deviations, and then performing an exhaustive search between these categories and
 	using a set of heuristics to keep the top N results. The search space is drastically reduced compared
 	to a naive (N choose K) search by restricting to combinations which contain subsets of players in
-	the same "skill deviation group" to be equally spread in a way that is non-consequetive across deviation
-	groups. This allows it to find a globally optimal solution (satisyfing the hueristic) in a smaller search
-	space that returns "shape matched" results.
+	the same "skill deviation group" to be equally spread in a way that is non-consequetively biased 
+	across adjacent deviation groups. This allows it to find a globally optimal solution (satisyfing 
+	the hueristic) in a smaller search space than a pure brute force that returns "shape matched" results.
 
-	Therefore, unstak is generally a more involved andexpensive operation due to its exhaustive search approach 
+	Therefore, unstak is generally a more involved and expensive operation due to its exhaustive search approach 
 	and may require being run as a delayed/background operation since it may take more than one frame to complete.
     """
     def __init__(self):
