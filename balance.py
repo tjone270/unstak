@@ -543,6 +543,68 @@ def generate_switch_proposals(teams, verbose=False, max_results=5):
 
 # UNSTAK_END -----------------------------------------------------------------------------------------------------------
 
+
+class UnstakSuggestionsGroup(object):
+    """
+    This class encapsulates a set of unstak balancing suggestions, and data related to current server
+    operations on these suggestions. It can be seen as a finite state machine managing these steps:
+
+        - STARTGEN: Invalidation of old suggestions. (e.g. vote enacted, teams change, new match).
+        - GENERATING: Generation of new suggestions (possibly a long running operation).
+        - STOREGEN: Recording the generated results (multiple choices of balancing)
+        - PRESENTGEN: Presentation of the group of suggestions, ready for selection.
+        - VOTECHOICE: Accepting democratic player votes for selecting the balance suggestion.
+                      (It can be forced by admin).
+        - RESETCHOICE: An admin nominated transition from VOTECHOICE to PRESENTGEN. 
+        			   (not part of the standard flow).
+        - PLAYERCONFIRMATION: Waiting for nominated switch players to confirm unanimous agreement.
+                              (It can be forced by admin).
+        - EXECUTESWITCH: Perform the swap action. After this we are back at STARTGEN.
+
+    When PRESENTGEN occurs, the options are listed in descending order of predicted fitness.
+    In other words, the calculated best balanced option is presented first.
+
+    A natural consequence of this structure is that we can encode an admin forced balance operation 
+    ("unstak") as a forced progression through all FSM steps assuming all players voted the first
+    choice in VOTECHOICE, followed by all players agreeing in PLAYERCONFIRMATION. So a balance operation
+    can simply set a bit that auto progresses through all states.
+
+    There are a few complexities to bear in mind when thinking about unstak balancing compared to the
+    existing balance operation:
+		- unstak will try to balance mismatched odd-even teams (n vs n+1). 
+			- legacy balance will only attempt to balance even teams.
+		- unstak can suggest player switches that can involve a single player or up to half of all players.
+			- legacy balance will only suggest a switch between player pairs.
+		- unstak tries to match "skill distribution shape" of the teams, and not just aggregated values.
+			- legacy balance can consider a fully uniform team vs a highly skewed team as balanced, 
+			  unstak will not. 
+			- As an example of a skewed vs uniform matching: Team A has 6 players around 1400 skillrating
+			  (normal distribution). Team B has players at [2200, 1950, 1800, 1100, 750, 600] skillratings.
+			  Both teams have the same skillrating average (1400) and sum. However, while Team B has a 
+			  chance of winning, the load on the top 3 players is large, due to the anchoring effect of
+			  the bottom 3 players on Team B. From experience, it can work, but it is most commonly a
+			  frustrating experience for all members of the skewed team, especially if Team A works together.
+			  Teamwork is a lot less effective for Team B due to skill disparity and focusing effects. 
+			  The "shape matching" property of unstak addresses this, but could be considered a disadvantage,
+			  because sometimes you can	have interesting matches with skewed players, but this is rare.
+
+	These differences are basically due to the fact that legacy balance uses a naive hill-climbing 
+	style algorithm using player pair switches for iterative improvements (locally optimal solutions). 
+	In contrast, unstak tries to completely re-assemble teams by first categorizing players based on 
+	relative stat deviations, and then performing an exhaustive search between these categories and
+	using a set of heuristics to keep the top N results. The search space is drastically reduced compared
+	to a naive (N choose K) search by restricting to combinations which contain subsets of players in
+	the same "skill deviation group" to be equally spread in a way that is non-consequetive across deviation
+	groups. This allows it to find a globally optimal solution (satisyfing the hueristic) in a smaller search
+	space that returns "shape matched" results.
+
+	Therefore, unstak is generally a more involved andexpensive operation due to its exhaustive search approach 
+	and may require being run as a delayed/background operation since it may take more than one frame to complete.
+    """
+    def __init__(self):
+        raise NotImplementedError()
+
+
 class balance(minqlx.Plugin):
     database = Redis
     
