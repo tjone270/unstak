@@ -572,7 +572,7 @@ class UnstakSuggestionsGroup(object):
     There are a few complexities to bear in mind when thinking about unstak balancing compared to the
     existing balance operation:
 		- unstak will try to balance mismatched odd-even teams (n vs n+1). 
-			- legacy balance will only attempt to balance even teams.
+			- legacy balance will only attempt to balance teams with matching player counts (n vs n).
 		- unstak can suggest player switches that can involve a single player or up to half of all players.
 			- legacy balance will only suggest a switch between player pairs.
 		- unstak tries to match "skill distribution shape" of the teams, and not just aggregated values.
@@ -595,13 +595,14 @@ class UnstakSuggestionsGroup(object):
 	using a set of heuristics to keep the top N results. The search space is drastically reduced compared
 	to a naive (N choose K) search by restricting to combinations which contain subsets of players in
 	the same "skill deviation group" to be equally spread in a way that is non-consequetively biased 
-	across adjacent deviation groups. This allows it to find a globally optimal solution (satisyfing 
+	across adjacent deviation groups. This allows it to find a globally optimal solution (satisfying 
 	the hueristic) in a smaller search space than a pure brute force that returns "shape matched" results.
 
 	Therefore, unstak is generally a more involved and expensive operation due to its exhaustive search approach 
 	and may require being run as a delayed/background operation since it may take more than one frame to complete.
     """
     def __init__(self):
+        # TODO: Implementation will be moved here once it is determined what needs to be run in the background
         raise NotImplementedError()
 
 
@@ -616,8 +617,9 @@ class balance(minqlx.Plugin):
         self.add_command(("getrating", "getelo", "elo", "glicko"), self.cmd_getrating, usage="<id> [gametype]")
         self.add_command(("remrating", "remelo", "remglicko"), self.cmd_remrating, 3, usage="<id>")
         self.add_command("balance", self.cmd_balance, 1)
-        self.add_command("unstak", self.cmd_unstak, 1)
         self.add_command(("teams", "teens"), self.cmd_teams)
+        self.add_command("unstak", self.cmd_unstak, 1)
+        self.add_command("stak", self.cmd_stak, 1)
         self.add_command("do", self.cmd_do, 1)
         self.add_command(("agree", "a"), self.cmd_agree)
         self.add_command(("ratings", "elos", "selo", "sglickos"), self.cmd_ratings)
@@ -630,12 +632,15 @@ class balance(minqlx.Plugin):
         self.request_counter = itertools.count()
         self.suggested_pair = None
         self.suggested_agree = [False, False]
+        self.unstak_suggested_switch_proposal = None
+        self.unstak_suggested_agree = []
         self.in_countdown = False
 
         self.set_cvar_once("qlx_balanceUseLocal", "1")
         self.set_cvar_once("qlx_balanceUrl", "qlstats.net:8080")
         self.set_cvar_once("qlx_balanceAuto", "1")
         self.set_cvar_once("qlx_balanceMinimumSuggestionDiff", "25")
+        self.set_cvar_once("qlx_balanceUnstakMinimumSuggestionPercentageDiff", "5")
         self.set_cvar_once("qlx_balanceApi", "elo")
 
         self.use_local = self.get_cvar("qlx_balanceUseLocal", bool)
@@ -976,6 +981,26 @@ class balance(minqlx.Plugin):
         players = dict([(p.steam_id, gt) for p in teams["red"] + teams["blue"]])
         self.add_request(players, self.callback_unstak, minqlx.CHAT_CHANNEL)
 
+    def unstak_move_players_to_new_team(team, team_index):
+        """
+        Move the given players to this team.
+        :param team: PlayerInfo list for one of the teams
+        :param team_index: The corresponding index of team. 0 = blue, 1 = red
+        :return: True if any players were moved
+        """
+        team_names = ["blue", "red"]
+        players_moved = False
+        this_team_name = team_names[team_index]
+        other_team_name = team_names[1 - team_index]
+        for player_info in team:
+            assert isinstance(player_info, PlayerInfo)
+            p = player_info.ext_obj
+            assert p
+            players_moved = (p.team != this_team_name)
+            p.team = this_team_name
+
+        return players_moved
+
     def callback_unstak(self, players, channel):
         # We check if people joined while we were requesting ratings and get them if someone did.
         teams = self.teams()
@@ -1003,29 +1028,9 @@ class balance(minqlx.Plugin):
         assert isinstance(team_combo, BalancedTeamCombo)
         new_blue_team, new_red_team = team_combo.teams_tup
 
-        def move_players_to_new_team(team, team_index):
-            """
-            Move the given players to this team.
-            :param team: PlayerInfo list for one of the teams
-            :param team_index: The corresponding index of team. 0 = blue, 1 = red
-            :return: True if any players were moved
-            """
-            team_names = ["blue", "red"]
-            players_moved = False
-            this_team_name = team_names[team_index]
-            other_team_name = team_names[1 - team_index]
-            for player_info in team:
-                assert isinstance(player_info, PlayerInfo)
-                p = player_info.ext_obj
-                assert p
-                players_moved = (p.team != this_team_name) 
-                p.team = this_team_name
-                    
-            return players_moved
-
         moved_players = False
-        moved_players = move_players_to_new_team(new_blue_team, 0) or moved_players
-        moved_players = move_players_to_new_team(new_red_team, 1) or moved_players
+        moved_players = self.unstak_move_players_to_new_team(new_blue_team, 0) or moved_players
+        moved_players = self.unstak_move_players_to_new_team(new_red_team, 1) or moved_players
 
         if not moved_players:
             channel.reply("No one was moved.")
@@ -1065,6 +1070,108 @@ class balance(minqlx.Plugin):
                                                                 favoured_team_colour_prefix,
                                                                 diff_rounded)
         self.msg(avg_msg)
+
+    def cmd_stak(self, player, msg, channel):
+        gt = self.game.type_short
+        if gt not in SUPPORTED_GAMETYPES:
+            player.tell("This game mode is not supported by the balance plugin.")
+            return minqlx.RET_STOP_ALL
+
+        teams = self.teams()
+        if len(teams["red"]) + len(teams["blue"]) <= 1:
+            player.tell("Not enough players to run the command.")
+            return minqlx.RET_STOP_ALL
+
+        teams = dict([(p.steam_id, gt) for p in teams["red"] + teams["blue"]])
+        self.add_request(teams, self.callback_stak, channel)
+
+    def callback_stak(self, players, channel):
+        # We check if people joined while we were requesting ratings and get them if someone did.
+        teams = self.teams()
+        current = teams["red"] + teams["blue"]
+        gt = self.game.type_short
+
+        for p in current:
+            if p.steam_id not in players:
+                d = dict([(p.steam_id, gt) for p in current])
+                self.add_request(d, self.callback_stak, channel)
+                return
+
+        # Generate a list containing per-team lists of unstak PlayerInfo objects
+        player_info_by_teams = []
+        for team in [teams["red"], teams["blue"]]:
+            players_dict = {}
+            for p in team:
+                player_steam_id = p.steam_id
+                player_name = p.clean_name
+                player_elo = self.ratings[p.steam_id][gt]["elo"]
+                players_dict[p.steam_id] = (player_name, player_elo, p)
+            team_players_info = player_info_list_from_steam_id_name_ext_obj_elo_dict(players_dict)
+            player_info_by_teams.append(team_players_info)
+        player_info_by_teams = tuple(player_info_by_teams)
+
+        # calculate and present the top switch scenarios:
+        switch_proposals = generate_switch_proposals(player_info_by_teams, max_results=1)
+
+        #player_dict = {(player.steam_id, player) for player in players}
+
+        team_names = ["blue", "red"]
+        switch_proposals = sorted(switch_proposals, key=lambda sp: abs(sp.balanced_team_combo.match_prediction.distance))
+        first_switch_proposal = None
+        for i, switch_proposal in enumerate(switch_proposals):
+            assert isinstance(switch_proposal, SwitchProposal)
+            switch_operation = switch_proposal.switch_operation
+            switch_team_combo = switch_proposal.balanced_team_combo
+            assert isinstance(switch_operation, SwitchOperation)
+            assert isinstance(switch_team_combo, BalancedTeamCombo)
+            match_prediction = switch_team_combo.match_prediction
+            assert isinstance(match_prediction, MatchPrediction)
+            print("switch option [%d]: %s | %s" %
+                  (i, describe_switch_operation(switch_operation, team_names=team_names),
+                   match_prediction.describe_prediction_short(team_names=team_names)))
+            if i == 0:
+                # Needs to change if supporting multi proposal voting
+                first_switch_proposal = switch_proposal
+
+        self.unstak_suggested_switch_proposal = first_switch_proposal
+
+        # move to do/agree cmd
+        """
+        # do unstak balancing on player data (doesnt actually do any balancing operations)
+        balanced_team_combos = balance_players_by_skill_variance(players_info, max_results=1)
+        team_combo = balanced_team_combos[0]
+        assert isinstance(team_combo, BalancedTeamCombo)
+        new_blue_team, new_red_team = team_combo.teams_tup
+
+        moved_players = False
+        moved_players = self.unstak_move_players_to_new_team(new_blue_team, 0) or moved_players
+        moved_players = self.unstak_move_players_to_new_team(new_red_team, 1) or moved_players
+
+        if not moved_players:
+            channel.reply("No one was moved.")
+            return True
+        """
+
+        # TODO: print some information about current teams.
+
+        minimum_suggestion_diff = self.get_cvar("qlx_balanceUnstakMinimumSuggestionPercentageDiff", int)
+        # TODO: print the suggestion
+
+        if switch and switch[1] >= minimum_suggestion_diff:
+            channel.reply("SUGGESTION: switch ^4{}^7 with ^4{}^7. Mentioned players can type ^4!a^7 to agree."
+                .format(switch[0][0].clean_name, switch[0][1].clean_name))
+            if not self.suggested_pair or self.suggested_pair[0] != switch[0][0] or self.suggested_pair[1] != switch[0][1]:
+                self.suggested_pair = (switch[0][0], switch[0][1])
+                self.suggested_agree = [False, False]
+        else:
+            i = random.randint(0, 99)
+            if not i:
+                channel.reply("Teens look ^4good!")
+            else:
+                channel.reply("Teams look good!")
+            self.suggested_pair = None
+
+        return True
 
     def cmd_teams(self, player, msg, channel):
         gt = self.game.type_short
@@ -1130,7 +1237,10 @@ class balance(minqlx.Plugin):
 
     def cmd_agree(self, player, msg, channel):
         """After the bot suggests a switch, players in question can use this to agree to the switch."""
-        if self.suggested_pair and not all(self.suggested_agree):
+        if self.unstak_suggested_switch_proposal:
+            #TODO: equivalent logic for unstak
+            pass
+        elif self.suggested_pair and not all(self.suggested_agree):
             p1, p2 = self.suggested_pair
             
             if p1 == player:
@@ -1224,15 +1334,19 @@ class balance(minqlx.Plugin):
         return avg
 
     def execute_suggestion(self):
-        p1, p2 = self.suggested_pair
-        try:
-            p1.update()
-            p2.update()
-        except minqlx.NonexistentPlayerError:
-            return
-        
-        if p1.team != "spectator" and p2.team != "spectator":
-            self.switch(self.suggested_pair[0], self.suggested_pair[1])
-        
-        self.suggested_pair = None
-        self.suggested_agree = [False, False]
+        if self.unstak_suggested_switch_proposal:
+            #TODO: equivalent logic for unstak
+            pass
+        else:
+            p1, p2 = self.suggested_pair
+            try:
+                p1.update()
+                p2.update()
+            except minqlx.NonexistentPlayerError:
+                return
+
+            if p1.team != "spectator" and p2.team != "spectator":
+                self.switch(self.suggested_pair[0], self.suggested_pair[1])
+
+            self.suggested_pair = None
+            self.suggested_agree = [False, False]
