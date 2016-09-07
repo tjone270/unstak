@@ -142,10 +142,6 @@ class PlayerInfo(object):
         return self._ext_obj
 
     @property
-    def team_name(self):
-        return self._ext_obj.team
-
-    @property
     def perf_history(self):
         return self._perf_history
 
@@ -247,6 +243,7 @@ class TeamStats(object):
 
     def skill_rating_stdev(self, player_stats_dict):
         return calc_standard_deviation(self.get_elo_list(player_stats_dict))
+
 
 
 class SingleTeamBakedStats(object):
@@ -544,8 +541,6 @@ def generate_switch_proposals(teams, verbose=False, max_results=5):
 
     return switch_proposals
 
-# UNSTAK_END -----------------------------------------------------------------------------------------------------------
-
 
 class Unstaker(object):
     """
@@ -634,6 +629,8 @@ class Unstaker(object):
             assert isinstance(player, PlayerInfo)
             players_signature.add((player.elo, player.elo_variance, player.team_name))
         return players_signature
+
+# UNSTAK_END -----------------------------------------------------------------------------------------------------------
 
 
 class balance(minqlx.Plugin):
