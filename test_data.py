@@ -162,7 +162,7 @@ def single_elo_test(test_case, print_success=False, **kwargs):
 class UnstakBalanceTest(unittest.TestCase):
     def test_elo_balancing_skill_band(self):
         for test_set in ELOTestSetRegistry.iter_tests():
-            result = single_elo_test(test_set, print_success=True, max_results=5)
+            result = single_elo_test(test_set, print_success=True, max_results=5, verbose=True)
             #self.assertTrue(result, "Team Mismatch")
 
 
